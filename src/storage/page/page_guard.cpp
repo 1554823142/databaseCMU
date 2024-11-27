@@ -44,10 +44,10 @@ ReadPageGuard::ReadPageGuard(page_id_t page_id, std::shared_ptr<FrameHeader> fra
   //add write authority, point to process the frame
   // 因而我们需要在构造函数中修改 pin_count_和rwlatch_的状态（加锁），同时还要在 replacer_中标记这一 frame的访问状态和可逐出性。
   std::shared_lock<std::shared_mutex>(frame_->rwlatch_);          //add lock，读可以有多个线程
-  frame_->pin_count_++;
+  //frame_->pin_count_++;                                                              ////////////////////
   replacer_->RecordAccess(frame_->frame_id_);               //标记可访问性
   replacer_->SetEvictable(frame_->frame_id_, false);
-
+  is_valid_ = true;
 
 }
 
@@ -85,12 +85,13 @@ ReadPageGuard::ReadPageGuard(ReadPageGuard &&that) noexcept
     frame_ = std::move(that.frame_);
     replacer_ = std::move(that.replacer_);
     bpm_latch_ = std::move(that.bpm_latch_);
+    is_valid_ = true;
 
     //that.Drop();              //直接清除
 
   // 因而我们需要在构造函数中修改 pin_count_和rwlatch_的状态（加锁），同时还要在 replacer_中标记这一 frame的访问状态和可逐出性。
     std::shared_lock<std::shared_mutex>(frame_->rwlatch_);          //add lock，读可以有多个线程
-    frame_->pin_count_++;
+    //frame_->pin_count_++;                                   //////////
     replacer_->RecordAccess(frame_->frame_id_);               //标记可访问性
     replacer_->SetEvictable(frame_->frame_id_, false);
   }
@@ -120,11 +121,12 @@ auto ReadPageGuard::operator=(ReadPageGuard &&that) noexcept -> ReadPageGuard & 
     frame_ = std::move(that.frame_);
     replacer_ = std::move(that.replacer_);
     bpm_latch_ = std::move(that.bpm_latch_);
+    is_valid_ = true;
     that.is_valid_ = false;
 
   // 因而我们需要在构造函数中修改 pin_count_和rwlatch_的状态（加锁），同时还要在 replacer_中标记这一 frame的访问状态和可逐出性。
     std::shared_lock<std::shared_mutex>(frame_->rwlatch_);          //add lock，读可以有多个线程
-    frame_->pin_count_++;
+    //frame_->pin_count_++;                               //////////////
     replacer_->RecordAccess(frame_->frame_id_);               //标记可访问性
     replacer_->SetEvictable(frame_->frame_id_, false);
   }  
@@ -183,14 +185,14 @@ void ReadPageGuard::Drop() {
   if(!is_valid_){return;}
   //在这个方法中需要释放掉所有的指针
   //保证不能重复释放
-  if(frame_->pin_count_ <= 0) {return;}
-  if(!is_valid_) {return;}
+  if(frame_ && frame_->pin_count_ <= 0) {return;}
+  //if(!is_valid_) {return;}
 
   //std::shared_lock<std::shared_mutex>(frame_->rwlatch_);          //add lock，读可以有多个线程
   
 
-  if(frame_->pin_count_-- == 0){                              //进行pin--
-    replacer_->SetEvictable(frame_->frame_id, true);        //如果无pin,则设置可以evit
+  if(frame_ && --frame_->pin_count_ == 0){                              //进行pin--
+    replacer_->SetEvictable(frame_->frame_id_, true);        //如果无pin,则设置可以evit
   }
   
   //清除所有的指针
@@ -229,9 +231,10 @@ WritePageGuard::WritePageGuard(page_id_t page_id, std::shared_ptr<FrameHeader> f
   //add write authority, point to process the frame
   // 因而我们需要在构造函数中修改 pin_count_和rwlatch_的状态（加锁），同时还要在 replacer_中标记这一 frame的访问状态和可逐出性。
   std::unique_lock<std::shared_mutex>(frame_->rwlatch_);          //add lock,写 时只有一个线程可以
-  frame_->pin_count_++;
+  //frame_->pin_count_++;                                     //
   replacer_->RecordAccess(frame_->frame_id_);               //标记可访问性
   replacer_->SetEvictable(frame_->frame_id_, false);
+  is_valid_ = true;
 }
 
 /**
@@ -256,11 +259,12 @@ WritePageGuard::WritePageGuard(WritePageGuard &&that) noexcept
     frame_ = std::move(that.frame_);
     replacer_ = std::move(that.replacer_);
     bpm_latch_ = std::move(that.bpm_latch_);
+    is_valid_ = true;
     that.is_valid_ = false;                     //将原来的对象设置为无效
 
   // 因而我们需要在构造函数中修改 pin_count_和rwlatch_的状态（加锁），同时还要在 replacer_中标记这一 frame的访问状态和可逐出性。
     std::unique_lock<std::shared_mutex>(frame_->rwlatch_);          //add lock，读可以有多个线程
-    frame_->pin_count_++;
+    //frame_->pin_count_++;                               ////////////////////
     replacer_->RecordAccess(frame_->frame_id_);               //标记可访问性
     replacer_->SetEvictable(frame_->frame_id_, false);
   }
@@ -289,11 +293,12 @@ auto WritePageGuard::operator=(WritePageGuard &&that) noexcept -> WritePageGuard
     frame_ = std::move(that.frame_);
     replacer_ = std::move(that.replacer_);
     bpm_latch_ = std::move(that.bpm_latch_);
+    is_valid_ = true;
     that.is_valid_ = false;
 
   // 因而我们需要在构造函数中修改 pin_count_和rwlatch_的状态（加锁），同时还要在 replacer_中标记这一 frame的访问状态和可逐出性。
     std::unique_lock<std::shared_mutex>(frame_->rwlatch_);          //add lock，读可以有多个线程
-    frame_->pin_count_++;
+    //frame_->pin_count_++;                                                 ////////
     replacer_->RecordAccess(frame_->frame_id_);               //标记可访问性
     replacer_->SetEvictable(frame_->frame_id_, false);
   }  
@@ -350,15 +355,17 @@ void WritePageGuard::Drop() {
   if(!is_valid_){return;}
   //在这个方法中需要释放掉所有的指针
   //保证不能重复释放
-  if(frame_->pin_count_ == 0) {return;}
-  if(!is_valid_) {return;}
+  if(frame_ && frame_->pin_count_ == 0) {return;}
 
   //要注意写回，否则会丢失修改                                                ?????????
   // if(IsDirty()){
   //   BufferPoolManager& bmp = 
   // }
   //std::shared_lock<std::shared_mutex>(frame_->rwlatch_);          //add lock，读可以有多个线程
-  frame_->pin_count_ = 0;
+  if(--frame_->pin_count_ == 0){
+    replacer_->SetEvictable(frame_->frame_id_, true);                     //如果pin = 0,则设置为evictable
+  }
+  //if(frame_->is_dirty_)
   
   //清除所有的指针
   frame_ = nullptr;

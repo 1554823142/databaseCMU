@@ -25,10 +25,10 @@ auto LRUKReplacer::Evict() -> std::optional<frame_id_t> {
   bool is_inf = false;
   size_t max_delta_time = 0;
 
-  if (Size() == 0) {
-    return std::nullopt;
-  }
-  frame_id_t ans;
+  // if (Size() == 0) {
+  //   return std::nullopt;
+  // }
+  frame_id_t ans = INVALID_PAGE_ID;;
   for (auto &[f_id, node] : node_store_) {
     //先检查是否可以evict
     if (!node.is_evictable_) {
@@ -63,6 +63,7 @@ auto LRUKReplacer::Evict() -> std::optional<frame_id_t> {
     node_store_[ans].history_.clear();
     node_store_.erase(ans);
   }
+  if(ans == INVALID_PAGE_ID) {return std::nullopt;}
   auto ret = std::optional<frame_id_t>(ans);
   return ret;
 }

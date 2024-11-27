@@ -142,39 +142,44 @@ auto BufferPoolManager::Size() const -> size_t { return num_frames_; }
 //找到一个空闲的frame，新分配一个物理页，并将该物理页的内容读取到刚找到的这个frame中
 auto BufferPoolManager::NewPage() -> page_id_t {
   std::lock_guard<std::mutex> lock(*bpm_latch_);
+
+  //auto frame_id = replacer_->Evict().value();
+
   bool use_free = true;
-  page_id_t free_frame_id;        //缓冲池现有frame
-  auto pid = replacer_->Evict();  // LRU——k替换策略的分配id
+  page_id_t free_frame_id = INVALID_PAGE_ID;        //缓冲池现有frame
+  
   // 先看free_list是否有
   if (!free_frames_.empty()) {
     //取出free_frames的一个frame
-    free_frame_id = free_frames_.back();
-    free_frames_.pop_back();
+    free_frame_id = free_frames_.front();
+    free_frames_.pop_front();
+  }
+  else{
+    use_free = false;
   }
   //在检查lru_k替换策略是否可行
-  else {
-    use_free = false;
-    if (!pid) {
-      //不可行则只能使用DiskScheduler::IncreaseDiskSpace
-      // disk_scheduler_->IncreaseDiskSpace(num_frames_ + 1);            ///////////////////////存疑
-      //由于没有可以分配的空闲frame_id
-      return INVALID_PAGE_ID;
-    }
-  }
-  if (!use_free) {
+  if(use_free == false) {
+    auto pid = replacer_->Evict();  // LRU——k替换策略的分配id
+    // if (!pid) {
+    //   //不可行则只能使用DiskScheduler::IncreaseDiskSpace
+    //   // disk_scheduler_->IncreaseDiskSpace(num_frames_ + 1);            ///////////////////////存疑
+    //   //由于没有可以分配的空闲frame_id
+    //   return INVALID_PAGE_ID;
+    // }
     free_frame_id = pid.value();
   }
+
   auto &newpage = frames_[free_frame_id];
 
   //考虑是否为脏页, 写回disk
-  if (newpage->is_dirty_) {
-    auto promise = disk_scheduler_->CreatePromise();
-    auto future = promise.get_future();
-    disk_scheduler_->Schedule({true, newpage->GetDataMut(), newpage->frame_id_, std::move(promise)});
-    future.get();
-    // ! clean
-    newpage->is_dirty_ = false;
-  }
+  // if (newpage->is_dirty_) {
+  //   auto promise = disk_scheduler_->CreatePromise();
+  //   auto future = promise.get_future();
+  //   disk_scheduler_->Schedule({true, newpage->GetDataMut(), newpage->frame_id_, std::move(promise)});
+  //   future.get();
+  //   // ! clean
+  //   newpage->is_dirty_ = false;
+  // }
   page_table_.erase(newpage->frame_id_);                            //  移除关系
   auto allocate_page_id = static_cast<page_id_t>(next_page_id_++);  //新分配给这个帧的数据页的 ID(待返回值)
   disk_scheduler_->IncreaseDiskSpace(allocate_page_id);             //调用看是否需要增加磁盘空间
@@ -182,13 +187,12 @@ auto BufferPoolManager::NewPage() -> page_id_t {
 
   // 把新page的参数更新下
   // newpage->frame_id_ = allocate_page_id;
-  newpage->pin_count_ = 1;
 
   newpage->Reset();  //清空frame数据
   // 更新replacer_
-  replacer_->RecordAccess(allocate_page_id);
-  replacer_->SetEvictable(allocate_page_id, false);
-
+  replacer_->RecordAccess(free_frame_id);
+  replacer_->SetEvictable(free_frame_id, false);
+  //newpage->pin_count_++;                                    /////////////////
   return allocate_page_id;
 }
 
@@ -345,41 +349,90 @@ auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_ty
 
   ////////还需要添加并发控制
 
-
-
-
-
-
-
-
-
+  
+  //BUSTUB_ASSERT(page_id != INVALID_PAGE_ID, "page_id is invalid");
+  if(page_id == INVALID_PAGE_ID) {return std::nullopt;}
   //检查page_id是否存在
   auto iter = page_table_.find(page_id);
-  if(iter == page_table_.end()) {return std::nullopt;}
-  auto frame_id = iter->second;
-
-  auto frame = frames_[frame_id];
   //如果在内存中，则直接构造guard
+  if(iter != page_table_.end()) {
+    auto frame_id = iter->second;
+    auto &frame = frames_[frame_id];
+    frame->pin_count_++;                                  //////////////////////////
+    auto write_guard = WritePageGuard(page_id, frame, replacer_, bpm_latch_);                     //如果在构造函数内增加pin_count则每创建一个构造函数就会增1
+    write_guard.is_valid_  = true;
+    
+    return std::make_optional<WritePageGuard>(std::move(write_guard));
+  }
+
+  
   // explicit WritePageGuard(page_id_t page_id, std::shared_ptr<FrameHeader> frame, std::shared_ptr<LRUKReplacer> replacer,
   //                         std::shared_ptr<std::mutex> bpm_latch);
-  auto write_guard = WritePageGuard(page_id, frame, replacer_, bpm_latch_);
+  
   //auto write_guard_ = std::optional<WritePageGuard>(write_guard);
-  frame_id_t free_frame_id;
-  //查看free_list中是否存在空闲位置, 若存在则分配id
-  if(!free_frames_.empty()){
-    free_frame_id = free_frames_.back();
-    free_frames_.pop_back();
-    //实现映射的更新 
-    page_table_[page_id] = free_frame_id;
-  
-    return write_guard;
-  }//替换策略
-  else{
-    free_frame_id = replacer_->Evict().value();
-    page_table_[page_id] = free_frame_id;
-    return write_guard;
+
+
+
+  std::lock_guard<std::mutex> lock(*bpm_latch_);
+
+  //auto frame_id = replacer_->Evict().value();
+
+  bool use_free = true;
+  page_id_t free_frame_id;        //缓冲池现有frame
+  auto pid = replacer_->Evict();  // LRU——k替换策略的分配id
+  // 先看free_list是否有
+  if (!free_frames_.empty()) {
+    //取出free_frames的一个frame
+    free_frame_id = free_frames_.front();
+    free_frames_.pop_front();
   }
+  //在检查lru_k替换策略是否可行
+  else {
+    use_free = false;
+    if (!pid) {
+      //不可行则只能使用DiskScheduler::IncreaseDiskSpace
+      // disk_scheduler_->IncreaseDiskSpace(num_frames_ + 1);            ///////////////////////存疑
+      //由于没有可以分配的空闲frame_id
+      return std::nullopt;
+    }
+  }
+  if (!use_free) {
+    free_frame_id = pid.value();
+  }
+  auto &newpage = frames_[free_frame_id];
+
   
+  // if (newpage->is_dirty_) {
+  //   auto promise = disk_scheduler_->CreatePromise();
+  //   auto future = promise.get_future();
+  //   disk_scheduler_->Schedule({true, newpage->GetDataMut(), newpage->frame_id_, std::move(promise)});
+  //   future.get();
+  //   // ! clean
+  //   newpage->is_dirty_ = false;
+  // }
+
+  //考虑是否为脏页, 写回disk
+  if(newpage->is_dirty_){
+    FlushPage(page_id);
+  }
+  page_table_.erase(newpage->frame_id_);                            //  移除关系
+  // auto allocate_page_id = static_cast<page_id_t>(next_page_id_++);  //新分配给这个帧的数据页的 ID(待返回值)
+  // disk_scheduler_->IncreaseDiskSpace(allocate_page_id);             //调用看是否需要增加磁盘空间
+  page_table_.emplace(page_id, free_frame_id);             //建立新关系
+
+  // 把新page的参数更新下
+  // newpage->frame_id_ = allocate_page_id;
+
+  newpage->Reset();  //清空frame数据
+  // 更新replacer_
+  replacer_->RecordAccess(free_frame_id);
+  replacer_->SetEvictable(free_frame_id, false);
+  
+
+  auto write_guard = WritePageGuard(page_id, newpage, replacer_, bpm_latch_);
+  write_guard.is_valid_  = true;                                    ////////////////////获得有效 ReadPageGuard 的唯一方法是通过缓冲池管理器！！！！！！！！！！！！！！！！！
+  newpage->pin_count_++;                                    ///////////////增加pin放在内部的函数中
+  return std::make_optional<WritePageGuard>(std::move(write_guard));
 
 }
 
@@ -433,6 +486,83 @@ auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_ty
  */
 auto BufferPoolManager::CheckedReadPage(page_id_t page_id, AccessType access_type) -> std::optional<ReadPageGuard> {
   //UNIMPLEMENTED("TODO(P1): Add implementation.");
+  //BUSTUB_ASSERT(page_id != INVALID_PAGE_ID, "page_id is invalid");
+  if(page_id == INVALID_PAGE_ID){return std::nullopt;}
+  //检查page_id是否存在
+  auto iter = page_table_.find(page_id);
+  //如果在内存中，则直接构造guard
+  if(iter != page_table_.end()) {
+    auto frame_id = iter->second;
+    auto &frame = frames_[frame_id];
+    frame->pin_count_++;
+    auto read_guard = ReadPageGuard(page_id, frame, replacer_, bpm_latch_);
+    read_guard.is_valid_ = true;
+    return std::make_optional<ReadPageGuard>(std::move(read_guard));
+  }
+
+  
+  // explicit WritePageGuard(page_id_t page_id, std::shared_ptr<FrameHeader> frame, std::shared_ptr<LRUKReplacer> replacer,
+  //                         std::shared_ptr<std::mutex> bpm_latch);
+  
+  //auto write_guard_ = std::optional<WritePageGuard>(write_guard);
+
+
+
+  std::lock_guard<std::mutex> lock(*bpm_latch_);
+
+  //auto frame_id = replacer_->Evict().value();
+
+  bool use_free = true;
+  page_id_t free_frame_id;        //缓冲池现有frame
+  auto pid = replacer_->Evict();  // LRU——k替换策略的分配id
+  // 先看free_list是否有
+  if (!free_frames_.empty()) {
+    //取出free_frames的一个frame
+    free_frame_id = free_frames_.front();
+    free_frames_.pop_front();
+  }
+  //在检查lru_k替换策略是否可行
+  else {
+    use_free = false;
+    if (!pid) {
+      //不可行则只能使用DiskScheduler::IncreaseDiskSpace
+      // disk_scheduler_->IncreaseDiskSpace(num_frames_ + 1);            ///////////////////////存疑
+      //由于没有可以分配的空闲frame_id
+      return std::nullopt;
+    }
+  }
+  if (!use_free) {
+    free_frame_id = pid.value();
+  }
+  auto &newpage = frames_[free_frame_id];
+
+  //考虑是否为脏页, 写回disk
+  if (newpage->is_dirty_) {
+    auto promise = disk_scheduler_->CreatePromise();
+    auto future = promise.get_future();
+    disk_scheduler_->Schedule({true, newpage->GetDataMut(), newpage->frame_id_, std::move(promise)});
+    future.get();
+    // ! clean
+    newpage->is_dirty_ = false;
+  }
+  page_table_.erase(newpage->frame_id_);                            //  移除关系
+  // auto allocate_page_id = static_cast<page_id_t>(next_page_id_++);  //新分配给这个帧的数据页的 ID(待返回值)
+  // disk_scheduler_->IncreaseDiskSpace(allocate_page_id);             //调用看是否需要增加磁盘空间
+  page_table_.emplace(page_id, free_frame_id);             //建立新关系
+
+  // 把新page的参数更新下
+  // newpage->frame_id_ = allocate_page_id;
+
+  newpage->Reset();  //清空frame数据
+  // 更新replacer_
+  replacer_->RecordAccess(free_frame_id);
+  replacer_->SetEvictable(free_frame_id, false);
+  
+
+  auto read_guard = ReadPageGuard(page_id, newpage, replacer_, bpm_latch_);
+  read_guard.is_valid_ = true;
+  newpage->pin_count_++;
+  return std::make_optional<ReadPageGuard>(std::move(read_guard));
 }
 
 /**
@@ -451,7 +581,8 @@ auto BufferPoolManager::CheckedReadPage(page_id_t page_id, AccessType access_typ
  */
 auto BufferPoolManager::WritePage(page_id_t page_id, AccessType access_type) -> WritePageGuard {
   auto guard_opt = CheckedWritePage(page_id, access_type);
-
+  //guard_opt->is_valid_ = true;
+  //guard_opt.value().frame_->pin_count_++;                                   ////////////////////
   if (!guard_opt.has_value()) {
     std::cerr << fmt::format("\n`CheckedPageWrite` failed to bring in page {}\n\n", page_id);
     std::abort();
@@ -490,7 +621,7 @@ auto BufferPoolManager::WritePage(page_id_t page_id, AccessType access_type) -> 
  */
 auto BufferPoolManager::ReadPage(page_id_t page_id, AccessType access_type) -> ReadPageGuard {
   auto guard_opt = CheckedReadPage(page_id, access_type);
-
+  //guard_opt.value().frame_->pin_count_++;
   if (!guard_opt.has_value()) {
     std::cerr << fmt::format("\n`CheckedPageRead` failed to bring in page {}\n\n", page_id);
     std::abort();

@@ -41,7 +41,7 @@ TEST(BufferPoolManagerTest, VeryBasicTest) {
   {
     auto guard = bpm->WritePage(pid);
     char *data = guard.GetDataMut();
-    snprintf(data, sizeof(str), "%s", str);
+    snprintf(data, sizeof(str), "%s", str);               //如果格式化后的字符串长度 < size，则将此字符串全部复制到str中，并给其后添加一个字符串结束符('\0')；
     EXPECT_STREQ(data, str);
   }
 
@@ -64,7 +64,7 @@ TEST(BufferPoolManagerTest, VeryBasicTest) {
 
 TEST(BufferPoolManagerTest, PagePinEasyTest) {
   auto disk_manager = std::make_shared<DiskManager>(db_fname);
-  auto bpm = std::make_shared<BufferPoolManager>(2, disk_manager.get(), 5);
+  auto bpm = std::make_shared<BufferPoolManager>(2, disk_manager.get(), 5);                 //frame 大小为2，则free_frames = 2
 
   page_id_t pageid0;
   page_id_t pageid1;

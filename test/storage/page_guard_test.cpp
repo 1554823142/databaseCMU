@@ -79,7 +79,7 @@ TEST(PageGuardTest, DropTest) {
     // Fill up the BPM.
     std::vector<WritePageGuard> guards;
     for (size_t i = 0; i < FRAMES; i++) {
-      auto new_pid = bpm->NewPage();
+      auto new_pid = bpm->NewPage();                            //当frame满了时分配的new_pid为-1（无效导致的错误）
       guards.push_back(bpm->WritePage(new_pid));
       ASSERT_EQ(1, bpm->GetPinCount(new_pid));
       page_ids.push_back(new_pid);
@@ -108,7 +108,7 @@ TEST(PageGuardTest, DropTest) {
 
   // Fetching the flushed page should result in seeing the changed value.
   auto immutable_guard = bpm->ReadPage(mutable_page_id);
-  ASSERT_EQ(0, std::strcmp("data", immutable_guard.GetData()));
+  ASSERT_EQ(0, std::strcmp("data", immutable_guard.GetData()));               //两字符串相等
 
   // Shutdown the disk manager and remove the temporary file we created.
   disk_manager->ShutDown();
