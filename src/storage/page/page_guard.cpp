@@ -366,7 +366,9 @@ void WritePageGuard::Drop() {
     replacer_->SetEvictable(frame_->frame_id_, true);                     //如果pin = 0,则设置为evictable
   }
   //if(frame_->is_dirty_)
+  if(frame_->is_dirty_){
   
+  }
   //清除所有的指针
   frame_ = nullptr;
   replacer_ = nullptr;

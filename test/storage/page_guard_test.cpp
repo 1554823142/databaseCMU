@@ -94,7 +94,7 @@ TEST(PageGuardTest, DropTest) {
   auto mutable_page_id = bpm->NewPage();
   auto mutable_guard = bpm->WritePage(mutable_page_id);
   strcpy(mutable_guard.GetDataMut(), "data");  // NOLINT
-  mutable_guard.Drop();
+  mutable_guard.Drop();   //在drop这个guard时，数据已经flush进磁盘了
 
   {
     // Fill up the BPM again.
@@ -107,7 +107,7 @@ TEST(PageGuardTest, DropTest) {
   }
 
   // Fetching the flushed page should result in seeing the changed value.
-  auto immutable_guard = bpm->ReadPage(mutable_page_id);
+  auto immutable_guard = bpm->ReadPage(mutable_page_id);                        //由于已经将数据flush进磁盘，所以可以读到数据
   ASSERT_EQ(0, std::strcmp("data", immutable_guard.GetData()));               //两字符串相等
 
   // Shutdown the disk manager and remove the temporary file we created.

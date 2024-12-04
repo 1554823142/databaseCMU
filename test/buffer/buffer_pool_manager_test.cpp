@@ -218,11 +218,12 @@ TEST(BufferPoolManagerTest, PagePinMediumTest) {
   // Scenario: There should be one frame available, and we should be able to fetch the data we wrote a while ago.
   {
     ReadPageGuard original_page = bpm->ReadPage(pid0);
-    EXPECT_EQ(0, strcmp(original_page.GetData(), "Hello"));
+    EXPECT_EQ(0, strcmp(original_page.GetData(), "Hello"));             //还是未刷回磁盘
   }
 
   // Scenario: Once we unpin page 0 and then make a new page, all the buffer pages should now be pinned. Fetching page 0
   // again should fail.
+  // 场景：一旦我们取消固定页面0，然后创建一个新的页面，所有的缓冲页面现在应该都被固定。再次获取页面0应该失败。
   auto last_pid = bpm->NewPage();
   auto last_page = bpm->ReadPage(last_pid);
 

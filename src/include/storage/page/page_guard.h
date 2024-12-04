@@ -134,6 +134,9 @@ class ReadPageGuard {
    * If you want extra (non-existent) style points, and you want to be extra fancy, then you can look into the
    * `std::shared_lock` type and use that for the latching mechanism instead of manually calling `lock` and `unlock`.
    */
+
+
+  std::shared_ptr<BufferPoolManager> bpm_;
 };
 
 /**
@@ -213,6 +216,11 @@ class WritePageGuard {
    * Since the buffer pool cannot know when this `WritePageGuard` gets destructed, we maintain a pointer to the buffer
    * pool's latch for when we need to update the frame's eviction state in the buffer pool replacer.
    */
+  /**
+
+    @brief 缓冲池的锁的共享指针。
+    由于缓冲池无法知道WritePageGuard何时被销毁，我们维护了一个指向缓冲池锁的指针，以便在我们需要在缓冲池替换器中更新帧的驱逐状态时使用。 */
+
   std::shared_ptr<std::mutex> bpm_latch_;
 
   /**
@@ -233,6 +241,7 @@ class WritePageGuard {
    * If you want extra (non-existent) style points, and you want to be extra fancy, then you can look into the
    * `std::unique_lock` type and use that for the latching mechanism instead of manually calling `lock` and `unlock`.
    */
+  std::shared_ptr<BufferPoolManager> bpm_;
 };
 
 }  // namespace bustub

@@ -35,7 +35,7 @@ auto FrameHeader::GetData() const -> const char * { return data_.data(); }
  *
  * @return char* A pointer to mutable data that the frame stores.
  */
-auto FrameHeader::GetDataMut() -> char * { return data_.data(); }
+auto FrameHeader::GetDataMut() -> char * { return data_.data(); }         //vector.data():返回一个指向数组中第一个元素的指针
 
 /**
  * @brief Resets a `FrameHeader`'s member fields.
@@ -166,11 +166,20 @@ auto BufferPoolManager::NewPage() -> page_id_t {
     //   //由于没有可以分配的空闲frame_id
     //   return INVALID_PAGE_ID;
     // }
+    if(!pid){return INVALID_PAGE_ID;}
     free_frame_id = pid.value();
   }
 
   auto &newpage = frames_[free_frame_id];
 
+  ///////////////////////////////////////////
+  ///问题： 何时，何变量可以将dirty page flush///
+  ///////////////////////////////////////////
+
+
+  // if(newpage->is_dirty_){
+  //   FlushPage();        //需要flush的page_id
+  // }
   //考虑是否为脏页, 写回disk
   // if (newpage->is_dirty_) {
   //   auto promise = disk_scheduler_->CreatePromise();
@@ -256,6 +265,8 @@ auto BufferPoolManager::DeletePage(page_id_t page_id) -> bool {
     if (page->pin_count_ > 0) {
       return false;
     }
+    //注意脏页刷回磁盘///////////////////////
+    if(page->is_dirty_){FlushPage(page_id);}
     // 删除页面
     page_table_.erase(page_id);
     free_frames_.push_back(frame_id);
@@ -358,6 +369,8 @@ auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_ty
   if(iter != page_table_.end()) {
     auto frame_id = iter->second;
     auto &frame = frames_[frame_id];
+    //if(frame->is_dirty_) {FlushPage(page_id);}
+    frame->is_dirty_ = true;                              //只要使用writepageguard就标记为脏页
     frame->pin_count_++;                                  //////////////////////////
     auto write_guard = WritePageGuard(page_id, frame, replacer_, bpm_latch_);                     //如果在构造函数内增加pin_count则每创建一个构造函数就会增1
     write_guard.is_valid_  = true;
@@ -411,10 +424,10 @@ auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_ty
   //   newpage->is_dirty_ = false;
   // }
 
-  //考虑是否为脏页, 写回disk
-  if(newpage->is_dirty_){
-    FlushPage(page_id);
-  }
+  //考虑是否为脏页, 写回disk      //////////////////////////////////
+  // if(newpage->is_dirty_){      ////////////////////////////////////
+  //   FlushPage(page_id);         //////////////////////////////////////////
+  // }
   page_table_.erase(newpage->frame_id_);                            //  移除关系
   // auto allocate_page_id = static_cast<page_id_t>(next_page_id_++);  //新分配给这个帧的数据页的 ID(待返回值)
   // disk_scheduler_->IncreaseDiskSpace(allocate_page_id);             //调用看是否需要增加磁盘空间
@@ -430,7 +443,8 @@ auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_ty
   
 
   auto write_guard = WritePageGuard(page_id, newpage, replacer_, bpm_latch_);
-  write_guard.is_valid_  = true;                                    ////////////////////获得有效 ReadPageGuard 的唯一方法是通过缓冲池管理器！！！！！！！！！！！！！！！！！
+  write_guard.is_valid_  = true;  
+  newpage->is_dirty_ = true;                                  ////////////////////获得有效 ReadPageGuard 的唯一方法是通过缓冲池管理器！！！！！！！！！！！！！！！！！
   newpage->pin_count_++;                                    ///////////////增加pin放在内部的函数中
   return std::make_optional<WritePageGuard>(std::move(write_guard));
 
@@ -494,6 +508,7 @@ auto BufferPoolManager::CheckedReadPage(page_id_t page_id, AccessType access_typ
   if(iter != page_table_.end()) {
     auto frame_id = iter->second;
     auto &frame = frames_[frame_id];
+    if(frame->is_dirty_){FlushPage(page_id);}
     frame->pin_count_++;
     auto read_guard = ReadPageGuard(page_id, frame, replacer_, bpm_latch_);
     read_guard.is_valid_ = true;
@@ -535,6 +550,10 @@ auto BufferPoolManager::CheckedReadPage(page_id_t page_id, AccessType access_typ
     free_frame_id = pid.value();
   }
   auto &newpage = frames_[free_frame_id];
+
+  if (newpage->is_dirty_){          //仅能通过page_guard获取page_id
+    
+  }
 
   //考虑是否为脏页, 写回disk
   if (newpage->is_dirty_) {
